@@ -1,0 +1,71 @@
+# Compila l'app su GitHub (gratis) e produce un APK da scaricare dal telefono.
+# Avvio: scheda Actions > "Build APK" > Run workflow. Tutto l'output finisce nel riepilogo del run.
+name: Build APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test logica giochi (Node)
+        run: |
+          npm i -g typescript >/dev/null 2>&1
+          bash tests/node_tests.sh 2>&1 | tee test_logs.txt
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Crea progetto Flutter e copia i sorgenti
+        run: |
+          flutter create --org app.duel --project-name duelapp --platforms android build_app
+          rm -rf build_app/lib build_app/test build_app/assets
+          cp -r lib assets build_app/
+          cp pubspec.yaml analysis_options.yaml build_app/
+          python3 - <<'PY'
+          p = 'build_app/android/app/src/main/AndroidManifest.xml'
+          s = open(p).read()
+          add = ('<uses-permission android:name="android.permission.INTERNET"/>\n'
+                 '    <queries><intent><action android:name="android.intent.action.VIEW"/>'
+                 '<data android:scheme="https"/></intent></queries>\n    ')
+          s = s.replace('<application', add + '<application', 1)
+          open(p, 'w').write(s)
+          PY
+
+      - name: Dipendenze
+        working-directory: build_app
+        run: flutter pub get
+
+      - name: Analisi (errori di codice)
+        working-directory: build_app
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | tee ../analyze_logs.txt
+
+      - name: Compila APK
+        working-directory: build_app
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          flutter build apk --release \
+            --dart-define=SUPABASE_URL="$SUPABASE_URL" \
+            --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" 2>&1 | tee ../build_logs.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: duelapp-apk
+          path: build_app/build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Riepilogo errori
+        if: always()
+        run: |
+          {
+            echo '## Test Node';        tail -30 test_logs.txt 2>/dev/null
+            echo '## flutter analyze';   tail -80 analyze_logs.txt 2>/dev/null
+            echo '## Build';             tail -60 build_logs.txt 2>/dev/null
+          } >> "$GITHUB_STEP_SUMMARY"
