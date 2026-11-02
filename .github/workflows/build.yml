@@ -64,6 +64,29 @@ jobs:
           
         run: test -n "$SUPABASE_URL" && test -n "$SUPABASE_ANON_KEY"
         
+      - name: Validate Supabase API key
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -eu
+          url="${SUPABASE_URL%/}"
+          auth_code=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --header "apikey: $SUPABASE_ANON_KEY" "$url/auth/v1/settings")
+          if [ "$auth_code" != "200" ]; then
+            echo "::error::Supabase Auth rejected the configured API key (HTTP $auth_code)"
+            exit 1
+          fi
+          rest_code=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --header "apikey: $SUPABASE_ANON_KEY" \
+            --header "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            "$url/rest/v1/games?select=id&limit=1")
+          if [ "$rest_code" != "200" ]; then
+            echo "::error::Supabase REST rejected the configured project/key (HTTP $rest_code)"
+            exit 1
+          fi
+          echo "Supabase Auth and REST accepted the configured public key."
+        
       - working-directory: build_app
       
         env:
@@ -88,7 +111,6 @@ jobs:
       
         with: {name: duelapp-scala40-arm64, path: build_app/build/app/outputs/flutter-apk/app-release.apk, if-no-files-found: error}
         
-
 
 
 
